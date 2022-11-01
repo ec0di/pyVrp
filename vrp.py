@@ -431,8 +431,8 @@ class HeuristicVRP(VRP):
 
 
 if __name__ == '__main__':
-    project_path = os.getcwd() + '\\pyVrp'
-    solution_path = project_path + '\\results\\solution.csv'  # assumes you are in project folder
+    project_path = os.getcwd() + '\\pyVrp'  # assumes you are one step out of project folder
+    solution_path = project_path + '\\results\\solution.csv'
 
     instances = ['R101', 'R102', 'C101', 'C102', 'RC1', 'RC2']
     # parameters

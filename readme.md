@@ -12,6 +12,9 @@ To get started you only need python with a pip for installation purposes:
 pip install -r requirements.txt
 ```
 
+Note if you want to use SCIP, you need to install it, since it does not come precompiled with OrTools.
+You can for instance install using https://github.com/scipopt/scip/blob/master/INSTALL.md
+
 ### Difference in implementation
 The biggest difference in the implementation from that of Sean Kelley is that I currently only add 1 route for each run of the subproblem, whereas 
 the Gurobi implementation potentially could add multiple. This seemed a bit harder to implement with OR-Tools, but I think
