@@ -43,14 +43,16 @@ These are added to this repo under instances. We choose to test the Solomon inst
 * LP solver: GLOP
 * MIP solver: SCIP (but CBC yields almost identical results, SCIP slightly better)
 * Time CG: 10 min
+* Machine: Intel NUC11PHKi7 Phantom Canyon (2.8 GHz)
 
-| Instance                 | R1     | R2     | C1     | C2     | RC1    | RC2    | 
-|--------------------------|--------|--------|--------|--------|--------|--------| 
-| Solomon (1987)           | 1436.7 | 1386.7 | 1343.7 | 797.6 | 1723.7 | 1651.1 | 
+| Instance           | R1     | R2     | C1     | C2     | RC1    | RC2    | 
+|--------------------|--------|--------|--------|--------|--------|--------| 
+| Solomon (1987)     | 1436.7 | 1386.7 | 1343.7 | 797.6 | 1723.7 | 1651.1 | 
 | Column Generation (2022) | 1676.8 | 1942.6 | 1302.2 | 1453.8 | 2416.7 | 1976.9 |
-| Initial Solution Only    | 2168.9 | 1942.6 | 1362.1 | 1453.8 | 2416.7 | 1976.9 |
+| Initial Solution Only | 2168.9 | 1942.6 | 1362.1 | 1453.8 | 2416.7 | 1976.9 |
 
-Even though VRP probably is not the best suited case for a Column Generation approach, we actually find okay solutions.
+Even though VRP probably is not the best suited case for a Column Generation approach, (since many effective meta 
+heuristics exists that can be applied to this problem) we actually find okay solutions.
 For at least half of the instances (R1, C1 and RC2) we are close to the performance of Solomon and for C1 instance, we actually outperform it.
 
 We also see that in 4/6 cases our CG approach does not yield any improvement in the solution from the initial solution.
