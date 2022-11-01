@@ -16,9 +16,9 @@ Note if you want to use SCIP, you need to install it, since it does not come pre
 You can for instance install using https://github.com/scipopt/scip/blob/master/INSTALL.md
 
 ### Difference in implementation
-The biggest difference in the implementation from that of Sean Kelley is that I currently only add 1 route for each run of the subproblem, whereas 
+The biggest difference in the implementation from that of [Sean Kelley](https://medium.com/@sean-patrick-kelley/how-to-implement-column-generation-for-vehicle-routing-bdb8027c957f) is that I currently only add 1 route for each run of the subproblem, whereas 
 the Gurobi implementation potentially could add multiple. This seemed a bit harder to implement with OR-Tools, but I think
- is definitely possible, if there should be a need for it for instance on large scale problems.
+ it is definitely possible. There could be large improvements to the solutions by solving this.
 
 I added route_costs specifically in a dict that I use for the objective function, since you cannot add variable contribution
 to the objective in the definition of variables in OR-Tools as you can with Gurobi.
