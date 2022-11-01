@@ -40,8 +40,8 @@ Again, I recommend to read the article of Sean Patrick Kelley, but I will also t
 
 ### Instances and testing
 I found lots of problem instances from the Github Repo: https://github.com/laser-ufpb/VRPTWController/tree/master/src
-These are added to this repo under instances. We choose to test the Solomon instances from this [webpage](http://www.bernabe.dorronsoro.es/vrp/index.html?/results/resultsSolom.htm)
-. They have added solution values for 6 instances across multiple algorithms. We choose to compare with the original creater Solomon, which found quite effective solutions to the instances.
+These are added to this repo under instances. I chose to test the Solomon instances, which are also tested on this [webpage](http://www.bernabe.dorronsoro.es/vrp/index.html?/results/resultsSolom.htm)
+. They have added solution values for 6 instances across multiple algorithms. I chose to compare with the original creater Solomon, which found quite effective solutions to the instances.
 
 * LP solver: GLOP
 * MIP solver: SCIP (but CBC yields almost identical results, SCIP slightly better)
