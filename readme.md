@@ -9,7 +9,6 @@ I recommend working in a virtual env, I use Conda myself, where you can specify 
 To get started you only need python with a pip for installation purposes:
 
 ```
-python -m pip install --upgrade --user ortools
 pip install -r requirements.txt
 ```
 
@@ -49,7 +48,7 @@ These are added to this repo under instances. We choose to test the Solomon inst
 |--------------------------|--------|--------|--------|--------|--------|--------| 
 | Solomon (1987)           | 1436.7 | 1386.7 | 1343.7 | 797.6 | 1723.7 | 1651.1 | 
 | Column Generation (2022) | 1676.8 | 1942.6 | 1302.2 | 1453.8 | 2416.7 | 1976.9 |
-| Initial Solution Only    | higher | 1942.6 | higher | 1453.8 | 2416.7 | 1976.9 |
+| Initial Solution Only    | 2168.9 | 1942.6 | 1362.1 | 1453.8 | 2416.7 | 1976.9 |
 
 Even though VRP probably is not the best suited case for a Column Generation approach, we actually find okay solutions.
 For at least half of the instances (R1, C1 and RC2) we are close to the performance of Solomon and for C1 instance, we actually outperform it.
@@ -59,6 +58,7 @@ We also see that in 4/6 cases our CG approach does not yield any improvement in 
 ### Improvements to the model
 * Find a way to retrieve N best routes for all subproblem optimizations.
 * Look more into why new routes found are not improving obj even in LP space.
+* Improve initial solution
 * Tuning of parameter: pricing_problem_mip_gap
 * Use OrTools Routing library
 * Use a more effective programming language for OR tasks (for instance C# or C++)

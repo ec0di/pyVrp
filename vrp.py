@@ -1,13 +1,11 @@
 """
-Constructs minimal example to run column generation heuristic for vehicle routing.
+Solves the Vericle Routing Problem (VRP) using Column Generation (CG) based on the work of Sean Kelley.
 * Defines input and output data requirements
 * Builds in-memory dataset
 * Defines base class, VRP, for data input and validation
 * Defines subclass, HeuristicVRP, for solving VRP with column generation
 """
 
-# install ortools with (GLOP and CBC solver) :
-# python -m pip install --upgrade --user ortools
 from ortools.linear_solver import pywraplp
 import os
 from ticdat.jsontd import make_json_dict
@@ -15,28 +13,28 @@ import time
 from typing import Tuple, Any, Union
 
 from pyVrp.helpers import input_schema, solution_schema, toy_input, route_is_feasible
-from instance_reader import Instance
+from pyVrp.instance_reader import Instance
 from pyVrp.initial_solutions import initial_solution
 
 
 class VRP:
-    def __init__(self, input_pth: str = None, solution_pth: str = None,
+    def __init__(self, input_pth: str = None, solution_path: str = None,
                  input_dict: dict[str, dict[str, Any]] = None, solution_dict=False, initial_solution_type='singleton',
                  mip_solver='CBC', max_count_no_improvements=10):
         """Base constructor for VRP. Checks the validity of the input data and
         solution path. Assigns common attributes.
         :param input_pth: The location of the directory of CSV's storing input data
-        :param solution_pth: The location of the directory of CSV's where solution data written
+        :param solution_path: The location of the directory of CSV's where solution data written
         :param input_dict: Dictionary storing input data
         :param solution_dict: Whether or not to return solution data as a dictionary
         """
-        assert solution_pth or solution_dict, 'must specify where to save solution'
-        if solution_pth:
-            assert os.path.isdir(os.path.dirname(solution_pth)), \
-                'the parent directory of sln_pth must exist'
+        assert solution_path or solution_dict, 'must specify where to save solution'
+        if solution_path:
+            assert os.path.isdir(os.path.dirname(solution_path)), \
+                'the parent directory of solution_path must exist'
 
         # assign base class attributes
-        self.solution_pth = solution_pth
+        self.solution_path = solution_path
         self.initial_solution_type = initial_solution_type
         self.mip_solver = mip_solver
         self.max_count_no_improvements = max_count_no_improvements
@@ -427,33 +425,34 @@ class HeuristicVRP(VRP):
                 sln.routes[k, stop] = f
 
         # save the solution
-        if self.solution_pth:
-            solution_schema.csv.write_directory(sln, self.solution_pth, allow_overwrite=True)
+        if self.solution_path:
+            solution_schema.csv.write_directory(sln, self.solution_path, allow_overwrite=True)
         return make_json_dict(solution_schema, sln, verbose=True)
 
 
 if __name__ == '__main__':
-    solution_pth = 'C:\\Users\\nikol\\PycharmProjects\\pyVrp\\results\\solution.csv'
+    project_path = os.getcwd() + '\\pyVrp'
+    solution_path = project_path + '\\results\\solution.csv'  # assumes you are in project folder
+
     instances = ['R101', 'R102', 'C101', 'C102', 'RC1', 'RC2']
     # parameters
-    mip_solver = 'SCIP'  # SCIP, CBC
-    instance_name = 'RC102'
-    max_solve_time = 60 * 10
+    mip_solver = 'CBC'  # SCIP, CBC
+    instance_name = 'R101'
+    max_solve_time = 10  # 10 * 60
 
     max_count_no_improvements = 100
     parameters = {'max_solve_time': {'value': max_solve_time},
                   'pricing_problem_mip_gap': {'value': 0.1},  # only works for SCIP, so no effect for CBC
                   'pricing_problem_time_limit': {'value': 180},}
     # Remember to change these paths to match your own
-    path = 'C:\\Users\\nikol\\PycharmProjects\\pyVrp'
-    instance = Instance(path + f'\\instances\\Solomon\\{instance_name}.txt', parameters)
-    #instance = Instance(path + '\\instances\\toy.txt', parameters)
+    instance = Instance(project_path + f'\\instances\\Solomon\\{instance_name}.txt', parameters)
+    #instance = Instance(project_path + '\\instances\\toy.txt', parameters)
 
     initial_solution_type, input_dict = 'tw_compatibility_a_la_niko', instance.input_dict
     #initial_solution_type, input_dict = 'singleton', toy_input
     #initial_solution_type, input_dict = 'tw_compatibility_a_la_niko', toy_input
 
-    heuristic_vrp = HeuristicVRP(input_dict=input_dict, solution_dict=True, solution_pth=solution_pth,
+    heuristic_vrp = HeuristicVRP(input_dict=input_dict, solution_dict=True, solution_path=solution_path,
                                  initial_solution_type=initial_solution_type, mip_solver=mip_solver,
                                  max_count_no_improvements=max_count_no_improvements)
     heuristic_sln = heuristic_vrp.solve()
