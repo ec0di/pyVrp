@@ -27,7 +27,7 @@ Then I made an instance_reader class, so that I could easily transform Solomon i
 Other than that there are smaller differences in the way you write up models / solvers for Gurobi and OR-Tools, which I implemented.
 
 
-### My idea of column generation
+### My idea of Column Generation
 Again, I recommend to read the article of Sean Patrick Kelley, but I will also try to give my view on how you can perceive column generation in a simple way.
 * Write your original problem up as a Restricted Set Covering (RSC) problem, which is the master problem.
 * Take advantage of LP relaxation of RSC + put all the constrains for the routes/plans onto the pricing problem.
