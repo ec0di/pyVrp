@@ -5,7 +5,7 @@ and replaces Gurobi with OR-Tools (Free solver from Google) and makes it possibl
 I want to highlight that I think the author (Sean Kelley) has done a really good job explaning Column Generation (CG) with a good example use-case on the Vehicle Route Problem (VRP).
 
 ### Installations
-I recommend working in a virtual env, I use Conda myself, where you can specify python version and keep packages local.
+I recommend working in a virtual env, I use Conda myself, where you can specify python version (I use 3.9) and keep packages local.
 To get started you only need python with a pip for installation purposes:
 
 ```
