@@ -1,0 +1,6 @@
+.vscode
+exeILSRVND
+build
+results.txt
+temp/
+test.cpp

@@ -6,101 +6,23 @@ Constructs minimal example to run column generation heuristic for vehicle routin
 * Defines subclass, HeuristicVRP, for solving VRP with column generation
 """
 
-import gurobipy as gu
+# install ortools with (GLOP and CBC solver) :
+# python -m pip install --upgrade --user ortools
+from ortools.linear_solver import pywraplp
 import os
-from ticdat import TicDatFactory
 from ticdat.jsontd import make_json_dict
 import time
 from typing import Tuple, Any, Union
 
-
-# ----------------- Define Input and Output Data Requirements ------------------
-# label column headers and set primary key constraints
-input_schema = TicDatFactory(
-    arc=[['start_idx', 'end_idx'], ['travel_time', 'cost']],
-    node=[['idx'], ['name', 'type', 'lat', 'long', 'open', 'close']],
-    order=[['node_idx'], ['weight']],
-    parameters=[['key'], ['value']]  # truck capacity
-)
-
-# set type constraints (pks default to strings. other cols default to floats)
-input_schema.set_data_type('arc', 'start_idx', must_be_int=True)
-input_schema.set_data_type('arc', 'end_idx', must_be_int=True)
-input_schema.set_data_type('node', 'idx', must_be_int=True)
-input_schema.set_data_type('node', 'name', number_allowed=False, strings_allowed="*", nullable=True)
-input_schema.set_data_type('node', 'type', number_allowed=False, strings_allowed=('depot', 'customer'))
-input_schema.set_data_type('node', 'lat', min=-90, max=90, inclusive_max=True)
-input_schema.set_data_type('node', 'long', min=-180, max=180, inclusive_max=True)
-input_schema.set_data_type('node', 'open', max=24, inclusive_max=True)
-input_schema.set_data_type('node', 'close', max=24, inclusive_max=True)
-input_schema.set_data_type('order', 'node_idx', must_be_int=True)
-
-# set foreign key constraints (all node indices must be an index of the node table)
-input_schema.add_foreign_key('arc', 'node', ['start_idx', 'idx'])
-input_schema.add_foreign_key('arc', 'node', ['end_idx', 'idx'])
-input_schema.add_foreign_key('order', 'node', ['node_idx', 'idx'])
-
-# set check constraints (all locations close no earlier than they open)
-input_schema.add_data_row_predicate('node', predicate_name="open_close_check",
-    predicate=lambda row: row['open'] <= row['close'])
-
-# set parameter constraints
-input_schema.add_parameter("truck_capacity", 40000)
-input_schema.add_parameter("max_solve_time", 60)
-input_schema.add_parameter("solutions_per_pricing_problem", "number_customers",
-                           strings_allowed=("number_customers",))
-input_schema.add_parameter("pricing_problem_mip_gap", .1, max=1)
-input_schema.add_parameter("pricing_problem_time_limit", 1)
-input_schema.add_parameter("min_column_generation_progress", .001, max=1)
-input_schema.add_parameter("column_generation_solve_ratio", .9, max=1)
-
-# solution tables
-solution_schema = TicDatFactory(
-    summary=[['key'], ['value']],  # routes and cost
-    route=[['idx', 'stop'], ['node_idx', 'arrival']]
-)
-
-solution_schema.set_data_type('route', 'idx', must_be_int=True)
-solution_schema.set_data_type('route', 'stop', must_be_int=True)
-
-
-# --------------- Define Static Input Data Set for Example Run -----------------
-toy_input = {
-    'arc': {
-        (0, 1): {'travel_time': 2.3639163739810654, 'cost': 618.1958186990532},
-        (1, 0): {'travel_time': 2.3639163739810654, 'cost': 118.19581869905328},
-        (0, 2): {'travel_time': 1.5544182164530995, 'cost': 577.720910822655},
-        (2, 0): {'travel_time': 1.5544182164530995, 'cost': 77.72091082265497},
-        (1, 2): {'travel_time': 0.853048419193608, 'cost': 42.6524209596804},
-        (2, 1): {'travel_time': 0.853048419193608, 'cost': 42.6524209596804}
-    },
-    'node': {
-        0: {'name': 'depot', 'type': 'depot', 'lat': 39.91, 'long': -76.5, 'open': 0, 'close': 24},
-        1: {'name': 'customer 1', 'type': 'customer', 'lat': 39.91, 'long': -74.61, 'open': 13, 'close': 21},
-        2: {'name': 'customer 2', 'type': 'customer', 'lat': 39.78, 'long': -75.27, 'open': 7, 'close': 15}
-    },
-    'order': {
-        1: {'weight': 13084},
-        2: {'weight': 8078}
-    },
-    'parameters': {
-        'truck_capacity': {'value': 40000},
-        'fleet_size': {'value': 2},
-        'max_solve_time': {'value': 60},
-        'exact_vrp_mip_gap': {'value': .01},
-        'solutions_per_pricing_problem': {'value': 'number_customers'},
-        'pricing_problem_mip_gap': {'value': .1},
-        'pricing_problem_time_limit': {'value': 1},
-        'min_column_generation_progress': {'value': .001},
-        'column_generation_solve_ratio': {'value': .9}
-    }
-}
+from pyVrp.helpers import input_schema, solution_schema, toy_input, route_is_feasible
+from instance_reader import Instance
+from pyVrp.initial_solutions import initial_solution
 
 
 class VRP:
-
     def __init__(self, input_pth: str = None, solution_pth: str = None,
-                 input_dict: dict[str, dict[str, Any]] = None, solution_dict=False):
+                 input_dict: dict[str, dict[str, Any]] = None, solution_dict=False, initial_solution_type='singleton',
+                 mip_solver='CBC', max_count_no_improvements=10):
         """Base constructor for VRP. Checks the validity of the input data and
         solution path. Assigns common attributes.
         :param input_pth: The location of the directory of CSV's storing input data
@@ -115,13 +37,20 @@ class VRP:
 
         # assign base class attributes
         self.solution_pth = solution_pth
+        self.initial_solution_type = initial_solution_type
+        self.mip_solver = mip_solver
+        self.max_count_no_improvements = max_count_no_improvements
+        self.routes = None
+        t0 = time.time()
         dat = self._data_checks(input_pth, input_dict)
         self.dat = dat
+        print(f"Data Checks done in {round(time.time() - t0, 1)} seconds")
         self.parameters = input_schema.create_full_parameters_dict(dat)
-        self.depot_idx = [i for i, f in self.dat.node.items() if f['type'] == 'depot'].pop()
+        self.depot_idx = [i for i, f in self.dat.nodes.items() if f['type'] == 'depot'].pop()
         self.fleet = list(range(self.parameters['fleet_size']))
-        self.M = max(dat.node[i]['close'] + f['travel_time'] - dat.node[i]['open']
-                     for (i, j), f in dat.arc.items()) + 1
+        self.M = max(dat.nodes[i]['close'] + f['travel_time'] + dat.nodes[i]['service_time'] - dat.nodes[i]['open']
+                     for (i, j), f in dat.arcs.items()) + 1
+        self.infinity = pywraplp.Solver.infinity()
 
     @staticmethod
     def _data_checks(input_pth: str = None, input_dict: dict[str, dict[str, Any]] = None) -> \
@@ -145,20 +74,24 @@ class VRP:
             pk_fails = {}
             dat = input_schema.TicDat(**input_dict)
         fk_fails = input_schema.find_foreign_key_failures(dat)
-        type_fails = input_schema.find_data_type_failures(dat)
         check_fails = input_schema.find_data_row_failures(dat)
-        assert not (pk_fails and fk_fails and type_fails and check_fails), \
+        type_fails = input_schema.find_data_type_failures(dat)
+        assert not pk_fails and not fk_fails and not check_fails and not type_fails, \
             "The following data failures were found: \n" \
-            f"Primary Key: {len(pk_fails)}, Foreign Key: {len(fk_fails)}, " \
-            f"Type Constraint: {len(type_fails)}, Check Constraint: {len(check_fails)}"
+            f"Type Constraint: {len(type_fails)}, Check Constraint: {len(check_fails)}, " \
+            f"Primary Key: {len(pk_fails)}, Foreign Key: {len(fk_fails)}, "
 
         # advanced data checks
+        for i, node in dat.nodes.items():
+            if i > 0:
+                assert dat.arcs[0, i]['travel_time'] + node['service_time'] <= node['close'], f'Node {i} is not possible to handle with VRP. Node: {node}'
+
         p = input_schema.create_full_parameters_dict(dat)
-        assert len([f for f in dat.node.values() if f['type'] == 'depot']) == 1, \
+        assert len([f for f in dat.nodes.values() if f['type'] == 'depot']) == 1, \
             "There can only be one depot amongst the nodes"
-        assert not [f for f in dat.order.values() if f['weight'] > p['truck_capacity']], \
+        assert not [f for f in dat.orders.values() if f['weight'] > p['truck_capacity']], \
             "No order can weigh more than truck capacity"
-        assert len(dat.node) - len(dat.order) == 1, \
+        assert len(dat.nodes) - len(dat.orders) == 1, \
             "There should be exactly one order for each customer"
 
         return dat
@@ -172,14 +105,25 @@ class HeuristicVRP(VRP):
         master and pricing models in gurobi.
         :param **kwargs: keyword arguments to pass onto base constructor
         """
-        init_start = time.time()
+        self.time_start = time.time()
         super().__init__(**kwargs)
-        self.mdl, self.z, self.c, self.route = self._create_master_problem()
-        self.sub_mdl, self.x, self.s = self._create_subproblem()
-        self.init_time = time.time() - init_start
 
-    def _create_master_problem(self) -> \
-            Tuple[gu.Model, dict[int, gu.Var], dict[int, gu.Var], dict[int, dict[int, dict[str, Any]]]]:
+        self.model, self.z, self.c, self.routes, self.route_costs = \
+            self._create_master_problem(solver_id='GLOP', initial_solution_tyoe=self.initial_solution_type)
+        self.sub_model, self.sub_model_params, self.x, self.s = self._create_subproblem()
+        self.init_time = time.time() - self.time_start
+        self.final_model_status = None
+
+    @staticmethod
+    def _print_routes(routes):
+        print('routes:')
+        for route_idx, route in routes.items():
+            print([node['node_idx'] for _, node in route.items()], f'route_idx: {route_idx}')
+        return [[node['node_idx'] for _, node in route.items() if node['node_idx']!=0] for route_idx, route in routes.items()]
+
+    def _create_master_problem(self, solver_id='GLOP', initial_solution_tyoe='tw_compatibility_a_la_niko') -> \
+            Tuple[pywraplp.Solver, dict[int, pywraplp.Variable], dict[int, pywraplp.Variable],
+                  dict[int, dict[int, dict[str, Any]]], dict[int, float]]:
         """ Create the gurobi model for the restricted set covering problem. Will
         eventually select a collection of routes that fulfill all customer orders.
         Begins as an LP to yield dual values for pricing problem. Once all desired
@@ -191,37 +135,78 @@ class HeuristicVRP(VRP):
         and arrival times for each route represented in the model.
         """
         # make model
-        mdl = gu.Model("heuristic_vrp")
+        model = pywraplp.Solver.CreateSolver(solver_id=solver_id)
 
-        # map a route index to the customer node for each singleton route
-        singleton = dict(enumerate(self.dat.order.keys()))
+        if self.routes is not None:
+            routes = self.routes
+            route_costs = self.route_costs
+        if solver_id == 'GLOP':
+            if self.routes is None and initial_solution_tyoe == 'singleton':
+                # order of stops in the route represented by each variable
+                # initialize to be the set of singleton routes (i.e. travel from depot to one customer and back)
 
-        # order of stops in the route represented by each variable
-        # initialize to be the set of singleton routes (i.e. travel from depot to one customer and back)
-        route = {route_idx: {
-            0: {'node_idx': self.depot_idx, 'arrival': 0},
-            1: {'node_idx': j, 'arrival': max(self.dat.arc[self.depot_idx, j]['travel_time'],
-                                              self.dat.node[j]['open'])},
-            2: {'node_idx': self.depot_idx, 'arrival': 24}
-        } for route_idx, j in singleton.items()}
+                # map a route index to the customer node for each singleton route
+                singleton = dict(enumerate(self.dat.orders.keys()))
 
-        # create variables and set objective
-        # z_i - if route i is chosen - begins relaxed for column generation
-        # initialize variables to represent the set of singleton routes created above
-        z = {route_idx: mdl.addVar(obj=self.dat.arc[self.depot_idx, j]['cost'] +
-                                   self.dat.arc[j, self.depot_idx]['cost'], name=f'z_{route_idx}')
-             for route_idx, j in singleton.items()}
-
+                routes = {route_idx: {
+                    0: {'node_idx': self.depot_idx, 'arrival': 0},
+                    1: {'node_idx': j, 'arrival': max(self.dat.arcs[self.depot_idx, j]['travel_time'],
+                                                      self.dat.nodes[j]['open'])},
+                    2: {'node_idx': self.depot_idx, 'arrival': 24}
+                } for route_idx, j in singleton.items()}
+                route_costs = {
+                    route_idx: self.dat.arcs[self.depot_idx, j]['cost'] + self.dat.arcs[j, self.depot_idx]['cost']
+                    for route_idx, j in singleton.items()}
+            elif self.routes is None and initial_solution_tyoe == 'tw_compatibility_a_la_niko':
+                t0 = time.time()
+                arcs = self.dat.arcs
+                routes_, self.tw_compability = initial_solution(self.dat.nodes, arcs, self.dat.orders,
+                                                                self.dat.parameters['fleet_size']['value'],
+                                                                self.dat.parameters['truck_capacity']['value'])
+                route_costs = {i: 0 for i in range(len(routes_))}
+                routes = {i: dict() for i in range(len(routes_))}
+                for route_idx, route in routes_.items():
+                    for i, customer in enumerate(route):  # i, customer in enumerate(route)
+                        if i == 0:
+                            last_customer = 0
+                            route_costs[route_idx] += arcs[last_customer, customer]['cost']
+                            routes[route_idx][i] = dict(node_idx=self.depot_idx)
+                            routes[route_idx][i+1] = dict(node_idx=customer)
+                        if 0 < i < len(route):
+                            last_customer = route[i-1]
+                            # todo, changes here! See if it works
+                            route_costs[route_idx] += arcs[last_customer, customer]['cost']
+                            routes[route_idx][i + 1] = dict(node_idx=customer)
+                            # if route_idx == 4:
+                            #    a=2
+                        if i == len(route) - 1:
+                            last_customer = customer
+                            customer = 0
+                            route_costs[route_idx] += arcs[last_customer, customer]['cost']
+                            routes[route_idx][i + 2] = dict(node_idx=customer)
+                print(f'Initial Solution Calculated in {round(time.time() - t0, 2)} seconds')
+            elif self.routes is not None:
+                pass
+            else:
+                assert False, 'You need to specify correct \'initial_solution_tyoe\''
+            # create variables and set objective
+            # z_i - if route i is chosen - begins relaxed for column generation
+            z = {route_idx: model.NumVar(name=f'z_{route_idx}', lb=0, ub=1)
+                 for route_idx, route in routes.items()}
+        else:  # we want MIP model with integer z variables
+            z = {route_idx: model.BoolVar(name=f'z_{route_idx}')
+                 for route_idx, route in routes.items()}
         # set constraints
         # 8) each customer must be visited by a route (i.e. have delivery demand met)
         # since starting routes are singletons, each must be selected to cover
-        c = {j: mdl.addConstr(z[route_idx] >= 1, name=f'c_{j}') for route_idx, j
-             in singleton.items()}
+        c = {j: model.Add(model.Sum([sum([j in [x['node_idx'] for x in route.values()]]) * z[route_idx]
+                                     for route_idx, route in routes.items()]) >= 1)
+             for j in self.dat.orders}
 
-        return mdl, z, c, route
+        return model, z, c, routes, route_costs
 
-    def _create_subproblem(self) -> \
-            Tuple[gu.Model, dict[Tuple[int, int], gu.Var], dict[int, gu.Var]]:
+    def _create_subproblem(self) -> Tuple[pywraplp.Solver, pywraplp.MPSolverParameters,
+                                          dict[Tuple[int, int], pywraplp.Variable], dict[int, pywraplp.Variable]]:
         """ Create the gurobi model for the pricing problem. Formulation adapted
         from https://how-to.aimms.com/Articles/332/332-Formulation-CVRP.html
         and https://how-to.aimms.com/Articles/332/332-Time-Windows.html. Since this
@@ -232,61 +217,53 @@ class HeuristicVRP(VRP):
         of variables representing arrival times at each customer
         """
         # make model
-        sub_mdl = gu.Model("vrp_subproblem")
+        sub_model = pywraplp.Solver.CreateSolver('CBC')
 
-        # save extra solutions to generate many routes per pricing problem solve
-        sub_mdl.setParam(
-            "PoolSolutions", len(self.dat.order) if
-            self.parameters['solutions_per_pricing_problem'] == 'number_customers'
-            else int(self.parameters['solutions_per_pricing_problem'])
-        )
-
-        # force early termination of pricing problem so we can solve it repeatedly
+        # force early termination of pricing problem, so we can solve it repeatedly
         # in fixed time period. tweak these parameters to find the right trade-off
         # between quantity and quality of columns generated
-        sub_mdl.setParam("MIPGap", self.parameters['pricing_problem_mip_gap'])
-        sub_mdl.setParam("TimeLimit", self.parameters['pricing_problem_mip_gap'])
+        sub_model_params = pywraplp.MPSolverParameters()
+        sub_model_params.SetDoubleParam(sub_model_params.RELATIVE_MIP_GAP, self.parameters['pricing_problem_mip_gap'])
 
         # create variables
         # x_i_j if this route travels from node i to node j
-        x = {(i, j): sub_mdl.addVar(vtype=gu.GRB.BINARY, name=f'x_{i}_{j}')
-             for i in self.dat.node for j in self.dat.node if i != j}
+        x = {(i, j): sub_model.BoolVar(name=f'x_{i}_{j}')
+             for i in self.dat.nodes for j in self.dat.nodes if i != j}
         # s_i time when service begins at node i
-        s = {i: sub_mdl.addVar(lb=f['open'], ub=f['close'], name=f's_{i}')
-             for i, f in self.dat.node.items()}
+        s = {i: sub_model.NumVar(lb=f['open'], ub=f['close']-f['service_time'], name=f's_{i}')
+             for i, f in self.dat.nodes.items()}
 
         # set constraints
         # 9) Any node j entered by this route must be left
-        for j in self.dat.node:
-            sub_mdl.addConstr(
-                gu.quicksum(x[i, j] for i in self.dat.node if i != j) -
-                gu.quicksum(x[j, h] for h in self.dat.node if j != h) == 0,
-                name=f"flow_conserve_{j}"
-            )
+        for j in self.dat.nodes:
+            sub_model.Add(
+                sub_model.Sum([x[i, j] for i in self.dat.nodes if i != j]) -
+                sub_model.Sum([x[j, i] for i in self.dat.nodes if j != i]) == 0,
+                name=f"flow_conserve_{j}")
         # 10) The route leaves the depot at most once
-        sub_mdl.addConstr(
-            gu.quicksum(x[self.depot_idx, j] for j in self.dat.order) <= 1,
-            name=f"include_depot"
-        )
+        sub_model.Add(
+            sub_model.Sum([x[self.depot_idx, j] for j in self.dat.orders]) <= 1,
+            name=f"include_depot")
         # 11) Route stays within capacity
-        sub_mdl.addConstr(
-            gu.quicksum(gu.quicksum(f['weight'] * x[i, j] for j, f in self.dat.order.items()
-                                    if i != j) for i in self.dat.node)
-            <= self.parameters['truck_capacity'], name=f"capacity"
-        )
+        sub_model.Add(
+            sub_model.Sum([sub_model.Sum([f['weight'] * x[i, j] for j, f in self.dat.orders.items()
+                                    if i != j]) for i in self.dat.nodes])
+            <= self.parameters['truck_capacity'], name=f"capacity")
 
         # 12) If route serves customers/orders i then j, the latter must occur
         # after the travel time from the former
-        for i in self.dat.node:
-            for j in self.dat.order:
+        for i in self.dat.nodes:
+            for j in self.dat.orders:
                 if i == j:
                     continue
-                sub_mdl.addConstr(
-                    s[i] + self.dat.arc[i, j]['travel_time'] - self.M * (1 - x[i, j])
-                    <= s[j], f'travel_time_{i}_{j}'
-                )
+                sub_model.Add(
+                    s[i] + self.dat.nodes[i]['service_time'] + self.dat.arcs[i, j]['travel_time'] -
+                    self.M * (1 - x[i, j]) <= s[j], f'travel_time_{i}_{j}')
 
-        return sub_mdl, x, s
+        return sub_model, sub_model_params, x, s
+
+    def _time_since_start(self):
+        return time.time() - self.time_start
 
     def solve(self) -> Union[None, dict[str, dict[str, Any]]]:
         """ Find a good solution to VRP using column generation and set covering.
@@ -296,70 +273,112 @@ class HeuristicVRP(VRP):
         demand covering routes.
         :return: None
         """
-        finding_better_routes = True
         remaining_solve_time = self.parameters['max_solve_time'] - self.init_time
         # set covering is not the hardest mip to solve, so give most of the time to column generation
-        col_gen_end = time.time() + self.parameters["column_generation_solve_ratio"] * \
+        col_gen_end = self._time_since_start() + self.parameters["column_generation_solve_ratio"] * \
             remaining_solve_time
+        finding_better_routes = True
+        find_all_routes = False  # todo, cleanup this
 
-        # iterate between solving master and subproblem to generate routes
+        # iterate between solving master and column_generation to generate routes
         # until we don't find improving routes or we run out of time
-        while finding_better_routes and time.time() < col_gen_end:
-            prev_obj = float('inf') if self.mdl.status == gu.GRB.LOADED else self.mdl.objVal
-            self.mdl.optimize()
-            # move on if we aren't making reasonable progress
-            if self.mdl.objVal > (1 - self.parameters['min_column_generation_progress']) * prev_obj:
+        prev_model_obj_value = float('inf')
+        model_mip_gap = float('inf')
+        count = 0
+        count_no_improvement = 0
+        while (finding_better_routes or find_all_routes) and self._time_since_start() < col_gen_end and \
+                model_mip_gap > self.parameters['master_problem_mip_gap']:
+            if count > 0:
+                self.model, self.z, self.c, self.routes, self.route_costs = self._create_master_problem(solver_id='GLOP')
+            model_obj = self.model.Sum([self.route_costs[route_idx] * self.z[route_idx] for route_idx in self.z.keys()])
+            self.model.Minimize(model_obj)
+            model_status = self.model.Solve()
+            if model_status != 0:
+                pywraplp.Solver.INFEASIBLE == 2
+                pywraplp.Solver.ABNORMAL == 4  # means trivially invalid
+                assert False
+
+            if model_status == 0 and self.model.Objective().Value() > \
+                    (1 - self.parameters['min_column_generation_progress']) * prev_model_obj_value:
+                count_no_improvement += 1
+                if count_no_improvement == self.max_count_no_improvements:
+                    print(f'We move on, since we are not making reasonable progress for {count_no_improvement} iterations')
+                    print('count', count)
+                    print('prev_model_obj_value', prev_model_obj_value)
+                    print('model_obj_value', self.model.Objective().Value())
+                    print('min_column_generation_progress', self.parameters['min_column_generation_progress'])
+                    break
+            elif model_status != 0:
+                print(f'We move on, since model_status is: {model_status}')
+                print('count', count)
+                print('prev_model_obj_value', prev_model_obj_value)
+                print('model_obj_value', self.model.Objective().Value())
+                print('min_column_generation_progress', self.parameters['min_column_generation_progress'])
+            else:
+                count_no_improvement = 0
+            if model_status == 0:
+                prev_model_obj_value = self.model.Objective().Value()
+            # reduced cost of a column = (column objective coefficient) - (row duals)^n_nurse_types * column coefs
+            obj = self.sub_model.Sum([f['cost'] * self.x[i, j] for (i, j), f in self.dat.arcs.items() if (i,j)!=(0,0)]) - \
+                  self.sub_model.Sum([self.c[j].dual_value() * self.sub_model.Sum([self.x[i, j] for i in self.dat.nodes if i != j])
+                               for j in self.dat.orders])
+            self.sub_model.Minimize(obj)
+
+            t0 = time.time()
+
+            # todo, move this, maybe solve twice
+            self.sub_model.SetTimeLimit(1000 * self.parameters['pricing_problem_time_limit'])
+            sub_model_status = self.sub_model.Solve(self.sub_model_params)
+
+            print(f'Time in sub_model solve: {time.time() - t0} on count {count}')
+            if sub_model_status != 0:
+                print(f'sub_model does not find solutions at count {count}!')
                 break
-            # reduced cost of a column = (column objective coefficient) - (row duals)^T * column coefs
-            self.sub_mdl.setObjective(
-                gu.quicksum(f['cost'] * self.x[i, j] for (i, j), f in self.dat.arc.items()) -
-                gu.quicksum(self.c[j].pi * gu.quicksum(self.x[i, j] for i in self.dat.node if i != j)
-                            for j in self.dat.order)
-            )
-            self.sub_mdl.optimize()
             # if negative objective, we have at least one column with a reduced cost
-            if self.sub_mdl.objVal < 0:
+            if self.sub_model.Objective().Value() < 0:
                 self._add_best_routes()
             else:
                 finding_better_routes = False
+            count += 1
 
         # update all route variables to binary and resolve to find a good set of covering routes
-        for var in self.z.values():
-            var.vtype = gu.GRB.BINARY
-        self.mdl.setParam("TimeLimit", .1*remaining_solve_time)
-        self.mdl.optimize()
+        # CBC is COIN-OR free MIP solver preinstalled with OR-Tools
+        self.model, self.z, self.c, self.routes, self.route_costs = \
+            self._create_master_problem(solver_id=self.mip_solver)
+        self.model.SetTimeLimit(int(1000 * .1*remaining_solve_time))
+        model_obj = self.model.Sum([self.route_costs[route_idx] * self.z[route_idx] for route_idx in self.z.keys()])
+        self.model.Minimize(model_obj)
+        self.final_model_status = self.model.Solve()
 
         return self._save_solution()
 
     def _add_best_routes(self) -> None:
         """ Add to the master problem the best routes found by the pricing problem
         and save their stop orders and arrival times in the route dictionary
+        NOTE, we currently only add the best route found with OrTools
         :return: None
         """
 
         route_idx = len(self.z)
         solution_number = 0
-        self.sub_mdl.setParam("SolutionNumber", solution_number)
+        sub_model_sol_count = 1
 
-        # iterate through columns with reduced costs found by gurobi
-        while solution_number < self.sub_mdl.SolCount and self.sub_mdl.PoolObjVal < 0:
-            route_cost = sum(f['cost'] * self.x[i, j].xn for (i, j), f in self.dat.arc.items())
+        # iterate through columns with reduced costs (for now this is just 1 column)
+        while solution_number < sub_model_sol_count:
             route = self._recover_route()
             # for each customer visited, get its corresponding constraint from the
             # master (set covering) problem
-            constrs = [self.c[f['node_idx']] for f in route.values() if
-                       f['node_idx'] != self.depot_idx]
 
-            # add the route as a column in the master problem
-            self.z[route_idx] = self.mdl.addVar(name=f'z_{route_idx}', obj=route_cost,
-                                                column=gu.Column([1]*len(constrs), constrs))
+
+            self.route_costs[route_idx] = sum(f['cost'] * self.x[i, j].solution_value() for (i, j), f in self.dat.arcs.items())
+            # set constraints
+            # 8) each customer must be visited by a route (i.e. have delivery demand met)
+
             # record the order of its stops, so we can report them later if chosen
-            self.route[route_idx] = route
+            self.routes[route_idx] = route
 
             route_idx += 1
             solution_number += 1
-            # queue the next solution from gurobi
-            self.sub_mdl.setParam("SolutionNumber", solution_number)
 
     def _recover_route(self):
         """ Unpack a route that the pricing problem generated
@@ -370,10 +389,10 @@ class HeuristicVRP(VRP):
         stop = 1
         node_idx = self._next_stop(self.depot_idx)
         while node_idx != self.depot_idx:
-            route[stop] = {'node_idx': node_idx, 'arrival': self.s[node_idx].xn}
+            route[stop] = {'node_idx': node_idx, 'arrival': self.s[node_idx].solution_value()}
             stop += 1
             node_idx = self._next_stop(node_idx)
-        route[stop] = {'node_idx': self.depot_idx, 'arrival': 24}
+        route[stop] = {'node_idx': self.depot_idx, 'arrival': self.dat.nodes[self.depot_idx]['close']}
         return route
 
     def _next_stop(self, current_node_idx) -> int:
@@ -383,9 +402,11 @@ class HeuristicVRP(VRP):
         :param current_node_idx: index of the current location in this route
         :return: the index of the next location traveled to in this route
         """
-        next_stops = [j for j in self.dat.node if current_node_idx != j and
-                      self.x[current_node_idx, j].xn > .9]
-        assert len(next_stops) == 1, 'the model constrains this list to have one element'
+        next_stops = [j for j in self.dat.nodes if current_node_idx != j and
+                      self.x[current_node_idx, j].solution_value() > .9]
+        if len(next_stops) == 0:
+            print('Something is off')
+            print([self.x[current_node_idx,j].solution_value() for j in self.dat.nodes if current_node_idx != j])
         return next_stops.pop()
 
     def _save_solution(self) -> Union[None, dict[str, dict[str, Any]]]:
@@ -394,27 +415,64 @@ class HeuristicVRP(VRP):
         :return: Optionally, a dictionary of the solution data
         """
         sln = solution_schema.TicDat()
-        selected_routes = [k for k, var in self.z.items() if var.x > .9]
+        selected_routes = [k for k, var in self.z.items() if var.solution_value() > .9]
 
         # record summary stats
-        sln.summary['cost'] = self.mdl.objVal
+        sln.summary['cost'] = self.model.Objective().Value()
         sln.summary['routes'] = len(selected_routes)
 
         # record the route that each used truck takes
         for k in selected_routes:
-            for stop, f in self.route[k].items():
-                sln.route[k, stop] = f
+            for stop, f in self.routes[k].items():
+                sln.routes[k, stop] = f
 
         # save the solution
         if self.solution_pth:
             solution_schema.csv.write_directory(sln, self.solution_pth, allow_overwrite=True)
-        else:
-            return make_json_dict(solution_schema, sln, verbose=True)
+        return make_json_dict(solution_schema, sln, verbose=True)
 
 
 if __name__ == '__main__':
-    # run the column generation approach
-    heuristic_vrp = HeuristicVRP(input_dict=toy_input, solution_dict=True)
+    solution_pth = 'C:\\Users\\nikol\\PycharmProjects\\pyVrp\\results\\solution.csv'
+    instances = ['R101', 'R102', 'C101', 'C102', 'RC1', 'RC2']
+    # parameters
+    mip_solver = 'SCIP'  # SCIP, CBC
+    instance_name = 'RC102'
+    max_solve_time = 60 * 10
+
+    max_count_no_improvements = 100
+    parameters = {'max_solve_time': {'value': max_solve_time},
+                  'pricing_problem_mip_gap': {'value': 0.1},  # only works for SCIP, so no effect for CBC
+                  'pricing_problem_time_limit': {'value': 180},}
+    # Remember to change these paths to match your own
+    path = 'C:\\Users\\nikol\\PycharmProjects\\pyVrp'
+    instance = Instance(path + f'\\instances\\Solomon\\{instance_name}.txt', parameters)
+    #instance = Instance(path + '\\instances\\toy.txt', parameters)
+
+    initial_solution_type, input_dict = 'tw_compatibility_a_la_niko', instance.input_dict
+    #initial_solution_type, input_dict = 'singleton', toy_input
+    #initial_solution_type, input_dict = 'tw_compatibility_a_la_niko', toy_input
+
+    heuristic_vrp = HeuristicVRP(input_dict=input_dict, solution_dict=True, solution_pth=solution_pth,
+                                 initial_solution_type=initial_solution_type, mip_solver=mip_solver,
+                                 max_count_no_improvements=max_count_no_improvements)
     heuristic_sln = heuristic_vrp.solve()
-    print('Heuristic Solution:')
-    print(heuristic_sln)
+
+    solver = heuristic_vrp.model
+    nodes, arcs, orders = heuristic_vrp.dat.nodes, heuristic_vrp.dat.arcs, heuristic_vrp.dat.orders
+    routes, route_costs = heuristic_vrp.routes, heuristic_vrp.route_costs
+    tw_compability = heuristic_vrp.tw_compability
+    if heuristic_vrp.final_model_status == pywraplp.Solver.OPTIMAL:
+        print()
+        print('Heuristic Solution:')
+        print('-------------------')
+        routes_without_depot = heuristic_vrp._print_routes(heuristic_vrp.routes)
+        for route_without_depot in routes_without_depot:
+            assert route_is_feasible(route_without_depot, nodes, arcs, orders, instance.truck_capacity), \
+                f'Something is off, we have an infeasible route: {route_without_depot}'
+        print('z values:')
+        [print(f'z_{route_idx} = {value.solution_value()}') for route_idx, value in heuristic_vrp.z.items()]
+        print('Objective value =', solver.Objective().Value())
+    else:
+        print('The problem does not have an optimal solution.')
+    print(f'Instance name: {instance_name}')

@@ -1,0 +1,4 @@
+numpy==1.23.3
+ortools==9.4.1874
+pandas==1.5.1
+ticdat==0.2.22
