@@ -33,7 +33,7 @@ Other than that there are smaller differences in the way you write up models / s
 ### My idea of Column Generation
 Again, I recommend to read the article of Sean Patrick Kelley, but I will also try to give my view on how you can perceive column generation in a simple way.
 * Write your original problem up as a Restricted Set Covering (RSC) problem, which is the master problem.
-* Take advantage of LP relaxation of RSC + put all the constrains for the routes/plans onto the pricing problem.
+* Take advantage of LP relaxation of RSC + put all the constrains for a single route/plan onto the pricing problem.
 * Solve LP of the master problem and use shadow values from the solution to find out if and how we can improve the solution by adding more routes/plans.
 * While we can improve the solution to the master problem, solve the pricing problem and take the best routes/plans and add them to the master problem. Now resolve the master problem.
 * When we cannot improve the master problem or time has run out, solve the RSC a final time, but without the LP relaxation. You now have your best column generated solution.
